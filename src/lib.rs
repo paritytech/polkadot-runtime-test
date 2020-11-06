@@ -1,12 +1,11 @@
-#![deny(unused_crate_dependencies)]
 use std::{str::FromStr, sync::Arc};
 
 use manual_seal::consensus::{babe::BabeConsensusDataProvider, ConsensusDataProvider};
 use polkadot_runtime::{Runtime, SignedExtra, FastTrackVotingPeriod, Event, Call, CouncilCollective, TechnicalCollective};
-use polkadot_service::{chain_spec::polkadot_config, PolkadotChainSpec};
+use polkadot_service::chain_spec::polkadot_config;
 use sc_consensus_babe::BabeBlockImport;
 use sc_finality_grandpa::GrandpaBlockImport;
-use sc_service::{new_full_parts, ChainType, Configuration, TFullBackend, TFullClient, TaskManager};
+use sc_service::{new_full_parts, Configuration, TFullBackend, TFullClient, TaskManager};
 use sc_executor::native_executor_instance;
 use sp_api::TransactionFor;
 use sp_consensus_babe::AuthorityId;
@@ -16,78 +15,23 @@ use sp_keyring::sr25519::Keyring::Alice;
 use sp_keystore::SyncCryptoStorePtr;
 use sp_runtime::generic::Era;
 use parity_scale_codec::Encode;
-use frame_support::{StorageValue, dispatch::GetDispatchInfo};
+use frame_support::StorageValue;
 use pallet_democracy::{AccountVote, Vote, Conviction};
-use substrate_test_runner::{Node, TestRequirements};
-use std::ops::{Deref, DerefMut};
+use substrate_test_runner::{Node, SignatureVerificationOverride, TestRequirements};
+use frame_support::weights::Weight;
 
 type BlockImport<B, BE, C, SC> = BabeBlockImport<B, C, GrandpaBlockImport<BE, B, C, SC>>;
-
-macro_rules! override_host_functions {
-    ($($fn_name:expr, $name:ident,)+) => {{
-        let mut host_functions = vec![];
-        $(
-
-            struct $name;
-            impl sp_wasm_interface::Function for $name {
-                fn name(&self) -> &str {
-                    &$fn_name
-                }
-
-                fn signature(&self) -> sp_wasm_interface::Signature {
-                    sp_wasm_interface::Signature {
-                        args: std::borrow::Cow::Owned(vec![
-                            sp_wasm_interface::ValueType::I32,
-                            sp_wasm_interface::ValueType::I64,
-                            sp_wasm_interface::ValueType::I32,
-                        ]),
-                        return_value: Some(sp_wasm_interface::ValueType::I32),
-                    }
-                }
-
-                fn execute(
-                    &self,
-                    context: &mut dyn sp_wasm_interface::FunctionContext,
-                    _args: &mut dyn Iterator<Item = sp_wasm_interface::Value>,
-                ) -> Result<Option<sp_wasm_interface::Value>, String> {
-                    <bool as sp_runtime_interface::host::IntoFFIValue>::into_ffi_value(true, context)
-                        .map(sp_wasm_interface::IntoValue::into_value)
-                        .map(Some)
-                }
-            }
-            host_functions.push(&$name as &'static dyn sp_wasm_interface::Function);
-        )+
-        host_functions
-   }};
-}
-
-pub struct CustomHostFunctions;
-
-impl sp_wasm_interface::HostFunctions for CustomHostFunctions {
-    fn host_functions() -> Vec<&'static dyn sp_wasm_interface::Function> {
-        let mut host_functions = override_host_functions!(
-            "ext_crypto_ecdsa_verify_version_1", EcdsaVerify,
-            "ext_crypto_ed25519_verify_version_1", Ed25519Verify,
-            "ext_crypto_sr25519_verify_version_1", Sr25519Verify,
-            "ext_crypto_sr25519_verify_version_2", Sr25519VerifyV2,
-        );
-
-        host_functions.extend(frame_benchmarking::benchmarking::HostFunctions::host_functions());
-        host_functions
-    }
-}
 
 native_executor_instance!(
 	pub Executor,
 	polkadot_runtime::api::dispatch,
 	polkadot_runtime::native_version,
-	CustomHostFunctions,
+	SignatureVerificationOverride,
 );
 
-/// Overrides crypto verification methods to always return true
-pub struct Requirements;
+pub struct ChainInfo;
 
-impl TestRequirements for Requirements {
+impl TestRequirements for ChainInfo {
     type Block = polkadot_core_primitives::Block;
     type Executor = Executor;
     type Runtime = polkadot_runtime::Runtime;
@@ -186,8 +130,8 @@ impl TestRequirements for Requirements {
 /// signature verification, which allows the runtime upgrade happen through pallet_democracy.
 ///
 /// Returns a handle to the node for post-upgrade assertions.
-pub fn perform_runtime_upgrade(wasm: Vec<u8>) -> Node<Requirements> {
-    let mut node = Node::<Requirements>::new().expect("failed to create node: ");
+pub fn perform_runtime_upgrade(wasm: Vec<u8>) -> Node<ChainInfo> {
+    let mut node = Node::<ChainInfo>::new().expect("failed to create node: ");
 
     type SystemCall = frame_system::Call<Runtime>;
     type DemocracyCall = pallet_democracy::Call<Runtime>;
@@ -229,7 +173,7 @@ pub fn perform_runtime_upgrade(wasm: Vec<u8>) -> Node<Requirements> {
     // submit external_propose call through council
     let external_propose = DemocracyCall::external_propose_majority(proposal_hash.clone().into());
     let proposal_length = external_propose.using_encoded(|x| x.len()) as u32 + 1;
-    let proposal_weight = external_propose.get_dispatch_info().weight;
+    let proposal_weight = Weight::MAX / 100_000_000;
     let proposal = CouncilCollectiveCall::propose(
         council_collective.len() as u32,
         Box::new(external_propose.clone().into()),
@@ -283,7 +227,7 @@ pub fn perform_runtime_upgrade(wasm: Vec<u8>) -> Node<Requirements> {
 
     // next technical collective must fast track the proposal.
     let fast_track = DemocracyCall::fast_track(proposal_hash.into(), FastTrackVotingPeriod::get(), 0);
-    let proposal_weight = fast_track.get_dispatch_info().weight;
+    let proposal_weight = Weight::MAX / 100_000_000;
     let fast_track_length = fast_track.using_encoded(|x| x.len()) as u32 + 1;
     let proposal = TechnicalCollectiveCall::propose(
         technical_collective.len() as u32,
