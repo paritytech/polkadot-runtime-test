@@ -6,7 +6,6 @@ macro_rules! assert_pallet_versions {
     ($($module:ty),*) => {{
         $(
             let storage_version = <$module>::storage_version();
-            println!("{:?}", storage_version.is_some());
             assert_eq!(Some(PalletVersion::new(2, 0, 0)), storage_version);
         )*
     }};

@@ -324,5 +324,8 @@ pub fn perform_runtime_upgrade(wasm: Vec<u8>) -> Node<ChainInfo> {
     // make sure event is in state
     assert_eq!(events.len(), 4);
 
+    // trigger on_runtime_upgraded
+    node.seal_blocks(1);
+
     node
 }
